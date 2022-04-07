@@ -1,0 +1,23 @@
+name: PR Label Check
+
+on:
+  pull_request:
+    types:
+      - labeled
+      - unlabeled
+      - opened
+      - reopened
+      - synchronize
+
+env:
+  version_labels: version/major, version/minor, version/patch
+
+jobs:
+  label_check:
+    runs-on: ubuntu-latest
+    name: Label Check
+    steps:
+      - name: Match Version Label
+        uses: zwaldowski/match-label-action@v3
+        with:
+          allowed: ${{ env.version_labels }}
