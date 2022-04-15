@@ -1,0 +1,120 @@
+name: Build And Deploy Version
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+on:
+  push:
+    tags:
+      - v*.*.*
+env:
+  # Use docker.io for Docker Hub if empty
+  REGISTRY: ghcr.io
+  # github.repository as <account>/<repo>
+  IMAGE_NAME: ${{ github.repository }}
+  GITHUB_TOKEN: ${{ secrets.BOT_ACCESS_TOKEN }}
+  CHART_NAME: gitflow
+  KUBE_NAMESPACE: gitflow
+
+jobs:
+  build-and-deploy:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: main
+          token: ${{ env.GITHUB_TOKEN }}
+
+      # Install the cosign tool except on PR
+      # https://github.com/sigstore/cosign-installer
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@1e95c1de343b5b0c23352d6417ee3e48d5bcd422
+        with:
+          cosign-release: "v1.4.0"
+
+      # Workaround: https://github.com/docker/build-push-action/issues/461
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@79abd3f86f79a9d68a23c75a09a9a85889262adf
+
+      # Login against a Docker registry except on PR
+      # https://github.com/docker/login-action
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@28218f9b04b4f3f62068d7b6ce6ca5b26e35336c
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Extract metadata (tags, labels) for Docker
+      # https://github.com/docker/metadata-action
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build and push Docker image with Buildx (don't push on PR)
+      # https://github.com/docker/build-push-action
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # Sign the resulting Docker image digest except on PRs.
+      # This will only write to the public Rekor transparency log when the Docker
+      # repository is public to avoid leaking data.  If you would like to publish
+      # transparency data even for private images, pass --force to cosign below.
+      # https://github.com/sigstore/cosign
+      - name: Sign the published Docker image
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        # This step uses the identity token to provision an ephemeral certificate
+        # against the sigstore community Fulcio instance.
+        run: echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} | tr "[:upper:]" "[:lower:]" | xargs cosign sign
+
+      - name: Get version from ref
+        id: get-version
+        run: echo ::set-output name=version::$(echo $GITHUB_REF | cut -d / -f 3)
+
+      - name: Update Chart.yaml
+        uses: endaft/action-yamler@v1.0.5
+        with:
+          file: ./charts/${{ env.CHART_NAME }}/Chart.yaml
+          path: appVersion
+          set: ${{ steps.get-version.outputs.version }}
+
+      - name: Commit and push the new version
+        uses: EndBug/add-and-commit@v8
+        with:
+          default_author: github_actions
+          message: "auto: Bump chart appVersion to ${{ steps.get-version.outputs.version }}"
+
+      - name: Install helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod 700 get_helm.sh
+          ./get_helm.sh
+
+      - name: Copy kubeconfig
+        run: echo "${{ secrets.KUBECONFIG }}" > kubeconfig
+
+      - name: Deploy chart
+        run: helm upgrade --install ${{ env.CHART_NAME }} --namespace ${{ env.KUBE_NAMESPACE }} --create-namespace ./charts/${{ env.CHART_NAME }} --kubeconfig kubeconfig
