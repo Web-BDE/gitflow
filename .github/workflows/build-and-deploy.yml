@@ -1,0 +1,91 @@
+name: Build And Deploy Version
+
+on:
+  push:
+    tags:
+      - v*.*.*
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  GITHUB_TOKEN: ${{ secrets.BOT_ACCESS_TOKEN }}
+  CHART_NAME: gitflow
+  KUBE_NAMESPACE: gitflow
+
+jobs:
+  build-and-deploy:
+    if: github.event.base_ref == 'refs/heads/main'
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          ref: main
+          token: ${{ env.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@1e95c1de343b5b0c23352d6417ee3e48d5bcd422
+        with:
+          cosign-release: "v1.4.0"
+
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@79abd3f86f79a9d68a23c75a09a9a85889262adf
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@28218f9b04b4f3f62068d7b6ce6ca5b26e35336c
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Sign the published Docker image
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+        run: echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }} | tr "[:upper:]" "[:lower:]" | xargs cosign sign
+
+      - name: Update Chart.yaml
+        uses: endaft/action-yamler@v1.0.5
+        with:
+          file: ./charts/${{ env.CHART_NAME }}/Chart.yaml
+          path: appVersion
+          set: ${{ github.ref_name }}
+
+      - name: Commit and push the new version
+        uses: EndBug/add-and-commit@v8
+        with:
+          default_author: github_actions
+          message: "auto: Bump chart appVersion to ${{ github.ref_name }}"
+
+      - name: Install helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod 700 get_helm.sh
+          ./get_helm.sh
+
+      - name: Copy kubeconfig
+        run: echo "${{ secrets.KUBECONFIG }}" > kubeconfig
+
+      - name: Deploy chart
+        run: helm upgrade --install ${{ env.CHART_NAME }} --namespace ${{ env.KUBE_NAMESPACE }} --create-namespace ./charts/${{ env.CHART_NAME }} --kubeconfig kubeconfig
