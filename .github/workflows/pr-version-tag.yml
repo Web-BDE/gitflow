@@ -1,8 +1,13 @@
 name: PR Tag Version
+
 on:
   pull_request:
     types:
       - closed
+
+env:
+  GITHUB_TOKEN: ${{ secrets.BOT_ACCESS_TOKEN }}
+  LABEL_PREFIX: version/
 
 jobs:
   build-version:
@@ -16,7 +21,7 @@ jobs:
         uses: actions-ecosystem/action-release-label@v1
         id: release-label
         with:
-          label_prefix: version/
+          label_prefix: ${{ env.LABEL_PREFIX }}
 
       - name: Get latest tag
         uses: actions-ecosystem/action-get-latest-tag@v1
@@ -31,8 +36,16 @@ jobs:
           current_version: ${{ steps.get-latest-tag.outputs.tag }}
           level: ${{ steps.release-label.outputs.level }}
 
-      - name: Push new version tag
-        uses: actions-ecosystem/action-push-tag@v1
+      - name: Create tag
+        uses: julb/action-manage-tag@v1
         with:
-          tag: ${{ steps.bump-semver.outputs.new_version }}
-          message: "Version ${{ steps.bump-semver.outputs.new_version }}: PR #${{ github.event.pull_request.number }} ${{ github.event.pull_request.title }}"
+          name: ${{ steps.bump-semver.outputs.new_version }}
+        env:
+          token: ${{ env.GITHUB_TOKEN }}
+
+      - name: Push new version tag
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ env.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
+          tags: true
