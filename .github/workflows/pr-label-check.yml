@@ -11,6 +11,7 @@ on:
 
 env:
   version_labels: version/major, version/minor, version/patch
+  release_labels: enhancement, bug fix, documentation
 
 jobs:
   label_check:
@@ -21,3 +22,8 @@ jobs:
         uses: zwaldowski/match-label-action@v3
         with:
           allowed: ${{ env.version_labels }}
+
+      - name: Match release labels
+        uses: zwaldowski/match-label-action@v3
+        with:
+          allowed: ${{ env.release_labels }}
