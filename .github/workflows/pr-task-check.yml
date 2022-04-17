@@ -1,0 +1,17 @@
+name: PR Task Check
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - edited
+
+jobs:
+  task-check:
+    name: Task Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: kentaro-m/task-completed-checker-action@v0.1.0
+        with:
+          repo-token: "${{ secrets.GITHUB_TOKEN }}"
