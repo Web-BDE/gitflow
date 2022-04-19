@@ -1,0 +1,30 @@
+name: Release Deploy to Prod
+
+on:
+  release:
+    types:
+      - published
+
+env:
+  CHART_NAME: gitflow
+  KUBE_NAMESPACE: gitflow
+
+jobs:
+  deploy-to-prod:
+    if: github.event.release.target_commitish == 'main'
+    name: Deploy to Prod
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod 700 get_helm.sh
+          ./get_helm.sh
+
+      - name: Copy kubeconfig
+        run: echo "${{ secrets.KUBECONFIG_PROD }}" > kubeconfig
+
+      - name: Deploy chart
+        run: helm upgrade --install ${{ env.CHART_NAME }} --namespace ${{ env.KUBE_NAMESPACE }} --create-namespace ./charts/${{ env.CHART_NAME }} --kubeconfig kubeconfig
